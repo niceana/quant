@@ -1,0 +1,75 @@
+#获取与可视化财务指标
+import akshare as ak
+import pandas as pd
+from sqlalchemy import create_engine,text
+import matplotlib.pyplot as plt
+
+
+
+date='20230331'
+#获取上、深交所2025年3月31日的一季度资产负债表
+stock_zcfz_em_df = ak.stock_zcfz_em(date)
+print(stock_zcfz_em_df)
+
+#获取上、深交所2025年3月31日的一季度利润表
+stock_lrb_em_df = ak.stock_lrb_em(date)
+print(stock_lrb_em_df)
+
+#获取上、深交所2025年3月31日的一季度现金流量表
+stock_xjll_em_df = ak.stock_xjll_em(date)
+print(stock_xjll_em_df)
+
+#输出到excel
+with pd.ExcelWriter('财务数据.xlsx') as writer: 
+    stock_zcfz_em_df.to_excel(writer, sheet_name='资产负债表')
+    stock_lrb_em_df.to_excel(writer, sheet_name='利润表')
+    stock_xjll_em_df.to_excel(writer, sheet_name='现金流量表')
+
+print("数据已保存到excel文件")
+
+
+
+#输出到postgresql数据库
+# 数据库配置
+engine = create_engine('postgresql://postgres:sa.com@localhost:5432/postgres')
+#将资产负债表、利润表、现金流量表按照股票代码字段合并输出
+stock_zcfz_em_df['股票代码'] = stock_zcfz_em_df['股票代码'].astype(str)
+stock_lrb_em_df['股票代码'] = stock_lrb_em_df['股票代码'].astype(str)
+stock_xjll_em_df['股票代码'] = stock_xjll_em_df['股票代码'].astype(str)
+stock_df = pd.merge(stock_zcfz_em_df, stock_lrb_em_df, on='股票代码', how='outer')
+stock_df = pd.merge(stock_df, stock_xjll_em_df, on='股票代码', how='outer')
+
+
+# 输出到数据库，如果表存在则补充数据，如果不存在则创建表
+stock_df.to_sql('stock_finance_data', engine, if_exists='append', index=False)
+
+print("数据已保存到postgresql数据库")
+
+
+
+
+
+#要可视化的股票代码
+stock_code = '002478'
+
+#查询股票代码为002478的股票的资产负债表数据
+df = pd.read_sql_query(text("SELECT * FROM stock_finance_data WHERE 股票代码=:stock_code "), engine, params={'stock_code': stock_code})
+
+#绘制资产负债表变化图
+#中文图例
+plt.rcParams['font.sans-serif'] = ['SimHei']
+plt.rcParams['axes.unicode_minus'] = False
+
+df.plot(x='公告日期_x', y=['资产-总资产', '负债-总负债', '股东权益合计'], kind='line',marker = 'o')
+plt.title('资产负债表')
+plt.show()
+
+#绘制利润表变化图
+df.plot(x='公告日期_x', y=['营业总收入', '营业总支出-营业总支出','营业利润', '利润总额', '净利润'], kind='line',marker = 'o')
+plt.title('利润表')
+plt.show()
+
+#绘制现金流量表变化图
+df.plot(x='公告日期_x', y=['经营性现金流-现金流量净额', '投资性现金流-现金流量净额', '融资性现金流-现金流量净额'], kind='line',marker = 'o')
+plt.title('现金流量表')
+plt.show()
