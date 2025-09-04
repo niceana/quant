@@ -1,0 +1,16 @@
+from pywencai import wencai 
+
+# 查询“最近5日涨停过的股票”
+df = wencai.get(query='最近5日涨停', sort_key='涨停日期', sort_order='desc')
+print(df.head())
+
+#自定义函数
+def select_stocks(query, perpage=100):
+    df = wencai.get(query=query, perpage=perpage)
+    if df is None or df.empty:
+        return []
+    return df['股票代码'].tolist()
+
+#使用函数查询“今日涨停且换手率>10%”的股票代码
+codes = select_stocks("今日涨停且换手率>10%")
+print(codes)
