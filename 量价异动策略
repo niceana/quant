@@ -1,0 +1,87 @@
+import akshare as ak
+import pandas as pd
+from datetime import datetime, timedelta
+
+# 配置参数
+DAYS_BACK = 3  # 对比过去3天的平均交易量
+
+
+
+def get_history_volume(symbol):
+    """获取股票历史成交量（过去3个交易日）"""
+    end_date = datetime.today().strftime("%Y%m%d")
+    start_date = (datetime.today() - timedelta(days=DAYS_BACK+5)).strftime("%Y%m%d")  # 多取几天避免节假日
+    
+    try:
+        df = ak.stock_zh_a_daily(symbol=symbol, start_date=start_date, end_date=end_date, adjust="")
+        print(df)
+        if len(df) < DAYS_BACK:
+            return  {'volume': 0, 'cv_volume': 0}
+        else:
+            #输出昨天的成交量
+            yesterday_volume = df.iloc[-1]["volume"]
+            return {'volume': yesterday_volume, 'cv_volume': 0}
+            #取最近3个交易日的成交量
+        #  # 取最近3个交易日的成交量
+        # mean_volume = df["volume"].tail(3).mean()  # 排除今天（假设今天数据尚未完全生成）
+        # #标准差
+        # std_volume = df["volume"].tail(3).std()
+        # #计算变异系数
+        # cv_volume = std_volume/mean_volume
+
+        # return {'volume': mean_volume, 'cv_volume': cv_volume}
+
+
+    except Exception as e:
+        print(f"获取{symbol}历史数据失败: {str(e)}")
+        return {'volume': 0, 'cv_volume': 0}
+
+
+def main():
+    stock_sh_a_spot_em_df = ak.stock_sh_a_spot_em()
+    
+    stock_list = stock_sh_a_spot_em_df["代码"].tolist()
+    
+    #给全部股票代码前面加上SH
+    stock_list = [("sh" ) + code for code in stock_list]
+
+    results = []
+    
+    # today_volume = get_today_volume("836270")
+    # print(f"今日成交量: {today_volume}")
+    i = 0
+    for symbol in stock_list:
+        history_volume = get_history_volume(symbol)
+        past_avg =history_volume['volume']/100
+        # #变异系数
+        # past_cv = history_volume['cv_volume']
+       #去除symbol前面的SH或SZ
+        df = stock_sh_a_spot_em_df[stock_sh_a_spot_em_df["代码"] == symbol[2:]]
+        #获取成交量
+        today_volume = df.loc[i,"成交量"]
+        #获取df的涨跌幅
+        change_percent = df.loc[i,"涨跌幅"]
+        #读取df的60日涨跌幅
+        change_percent_60 = df.loc[i,"60日涨跌幅"]
+
+        #因为序列不断增加，所以得用i来定位
+        i += 1
+        print(i)
+        print(f"{symbol} 今日成交量: {today_volume} 过去3日均值: {past_avg} 超出比例: {(today_volume / past_avg - 1) * 100 if past_avg else 0}%")
+        #如果今日交易量超过过去三天平均交易量，则记录
+        if past_avg and today_volume >  past_avg:
+            results.append({"代码": symbol, "今日成交量": today_volume, "过去3日均值": past_avg, "超出比例%": (today_volume / past_avg - 1) * 100, "涨跌幅":change_percent,"60日涨跌幅":change_percent_60} )
+            print(f"{symbol} 今日成交量超过过去3日均值")
+    # 生成排行榜
+    if results:
+        df = pd.DataFrame(results).sort_values(by="超出比例%", ascending=False)
+        #输出到excel
+        df.to_excel("sh排行榜数据.xlsx", index=False)
+    else:
+        print("未找到符合条件的股票")
+
+if __name__ == "__main__":
+    
+    #get_history_volume("sz000001")
+    main()
+    
