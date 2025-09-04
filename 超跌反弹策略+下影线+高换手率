@@ -1,0 +1,108 @@
+#超跌反弹策略+下引线+换手率
+import os
+import pandas as pd
+import warnings
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from sqlalchemy import create_engine,text
+import pandas as pd
+day_list=[1,5,10,20,30]
+all_df=pd.DataFrame()
+# 数据库配置
+# engine = create_engine('postgresql://postgres:sa.com@localhost:5432/postgres')
+# df=pd.read_sql_query(text("""SELECT * FROM tr_day_stata  ; """),engine)
+
+df=pd.read_excel ('D:\exploitation\python\TRD_Dalyr.xlsx')
+df1=pd.read_excel ('D:\exploitation\python\TRD_Dalyr1.xlsx')
+df2=pd.read_excel ('D:\exploitation\python\TRD_Dalyr2.xlsx')
+df3=pd.read_excel ('D:\exploitation\python\TRD_Dalyr3.xlsx')
+df4=pd.read_excel ('D:\exploitation\python\TRD_Dalyr4.xlsx')
+df5=pd.read_excel ('D:\exploitation\python\TRD_Dalyr5.xlsx')
+
+#合并数据
+df = pd.concat([df,df1,df2,df3,df4,df5])
+
+#只选601，602开头的股票
+df11=df[df['Stkcd'].astype(str).str.startswith('600')] 
+df22=df[df['Stkcd'].astype(str).str.startswith('601')]
+df33=df[df['Stkcd'].astype(str).str.startswith('603')] 
+df44=df[df['Stkcd'].astype(str).str.startswith('605')] 
+df55=df[df['Stkcd'].astype(str).str.startswith('000')] 
+df = pd.concat([df11,df22,df33,df44,df55])
+
+df['换手率']=df['Dnvaltrd']/(df['Dsmvosd']*1000)
+df['下引线'] = df['Clsprc']/df['Loprc']
+
+change_mean= 0
+ninety_percentile= 0
+# 计算每个股票前一天的涨跌幅变化，并将结果填充为0
+for i in range(1, 13):  
+    df[f'前{i}changeratio'] = df.groupby('Stkcd')['changeratio'].shift(i).fillna(0)
+    df[f'前{i}换手率'] = df.groupby('Stkcd')['换手率'].shift(i).fillna(0)
+    df[f'前{i}下引线'] = df.groupby('Stkcd')['下引线'].shift(i).fillna(0)
+    #计算前i天的涨跌幅变化的均值
+
+# df['前10换手率'] = df.groupby('Stkcd')['换手率'].shift(10).fillna(0)
+# df['前11换手率'] = df.groupby('Stkcd')['换手率'].shift(11).fillna(0)
+# df['前8换手率'] = df.groupby('Stkcd')['换手率'].shift(8).fillna(0)
+
+#去重查询所有的股票代码
+stkcd_list=df['Stkcd'].unique()
+#查询所有现在的上市公司股票代码
+#-0.09 -0.09 -0.09 -0.05 -0.05 9 10 11 2.44
+#循环执行每组数据
+for stkcd in stkcd_list:
+    # con1=df['前1changeratio']>0.0 
+    # con2=df['前2changeratio']>0.0 
+    # con3=df['前3changeratio']>0.0
+    # con4=df['前4changeratio']>-0.05
+    # con5=df['前5changeratio']>-0.04
+    # con6=df['前6changeratio']>-0.04
+    # con7=df['前7changeratio']>-0.04
+    # con8=df['前8changeratio']>-0.04
+    # con9=df['前9changeratio']>-0.04
+    df_temp=df[df['Stkcd']==stkcd]
+    ninety_percentile = df_temp['换手率'].quantile(0.95)
+    # con6=df_temp['前6changeratio']>-0.05
+    # con7=df_temp['前7changeratio']>-0.05
+    # con8=df_temp['前8changeratio']>-0.07
+    # con9=df_temp['前9changeratio']>-0.07
+    # con10=df_temp['前10changeratio']>-0.07
+    con11=df_temp['前11changeratio']<-0.09
+    con12=df_temp['前12changeratio']<-0.09
+
+    # con100 = df_temp['前7changeratio'] <0.04
+    # con111 = df_temp['前9changeratio'] <0.04
+    # con122 = df_temp['前8changeratio'] <0.04
+
+    #con1000=df_temp['前9换手率']>ninety_percentile
+    con1111=df_temp['前10换手率']>ninety_percentile
+    con1112=df_temp['前11换手率']>ninety_percentile
+
+    
+    df_temp.loc[con11 &con12  & con1111 & con1112,'signal']=1
+    #将df_temp合并到all_df中
+    all_df=pd.concat([all_df,df_temp])
+
+
+df=all_df[all_df['signal']==1]
+#去掉changeratio为空的行
+df=df.dropna(subset=['changeratio'])
+#计算几个列的（1+）然后相乘的累积值
+df['累计收益率']=((df['前4changeratio']+1))
+
+con11111= df['前5下引线']>1.03
+df.loc[con11111,'signal']=-1
+df = df[df['signal']==-1]
+df = df.sort_values(by=['Dsmvosd'], ascending=True)
+
+df=df.drop_duplicates(subset=['Trddt'],keep='first')
+print(df)
+print(df['累计收益率'].mean())
+#计算（1+涨跌幅）相乘的累积值
+print((df['累计收益率']).cumprod())
+#将df[累计收益率]输出为数组
+print(df['累计收益率'].values)
+
+#输出到excel
+df.to_excel('d:\exploitation\python\stock清洗.xlsx',sheet_name='sheet2',index=False)
+
