@@ -1,0 +1,141 @@
+#计算收盘价的复权价
+#查询df中signal列为-1的行的总数
+# print(df[df['signal']==-1].shape[0])
+# print(df[df['signal']==-1])
+
+# df=pd.read_sql_query(text("""SELECT COUNT(*) FROM tr_day_stata where trddt> '2024-01-01' ; """),engine)
+# df=pd.read_sql_query(text("""SELECT * FROM tr_day_stata where trddt> '2024-01-01' order by trddt ; """),engine)
+# print(df.head())
+# #df去重查询所有的股票代码
+# stkcd_list=df['Stkcd'].unique()
+
+# def rehabilitation(df: object) -> object:
+#     """
+#     :rtype: object
+#     """
+
+#     # =计算涨跌幅
+#     df['涨跌幅'] = df['收盘价'] / df['前收盘价'] - 1
+#     # =计算复权价：计算所有因子当中用到的价格，都使用复权价
+#     df['复权因子'] = (1 + df['涨跌幅']).cumprod()
+#     df['收盘价_复权'] = df['复权因子'] * (df.iloc[0]['收盘价'] / df.iloc[0]['复权因子'])
+#     df['开盘价_复权'] = df['开盘价'] / df['收盘价'] * df['收盘价_复权']
+#     df['最高价_复权'] = df['最高价'] / df['收盘价'] * df['收盘价_复权']
+#     df['最低价_复权'] = df['最低价'] / df['收盘价'] * df['收盘价_复权']
+#     df['前收盘价_复权']=df['前收盘价']/df['收盘价']*df['收盘价_复权']
+#     # 原始的价格叫xx_原，复权两个字去掉
+#     # df.rename(columns={'开盘价': '开盘价_原', '最高价': '最高价_原', '最低价': '最低价_原', '收盘价': '收盘价_原'}, inplace=True)
+#     # df.rename(columns={'开盘价_复权': '开盘价', '最高价_复权': '最高价', '最低价_复权': '最低价', '收盘价_复权': '收盘价'}, inplace=True)
+#     print(df)
+#     return df
+
+# def cal_fl(df):
+#     # 计算复权价
+#     df = rehabilitation(df)
+#     df['排名'] = df['收盘价'].rolling(window=120).rank(
+#         ascending=False, pct=True)
+#     con1 = df['排名'] <= 0.2
+#     con2 = df['排名'] >= 0.8
+#     # df['换手率'] = df['成交额'] / df['流通市值']
+#     # df['mid'] = df['换手率'].rolling(120).mean()
+#     # df['std'] = df['换手率'].rolling(120).std()
+#     # df['up'] = df['mid'] + df['std'] * 2
+#     # con3 = df['换手率'] > df['up']
+#     con3=df['成交量'] > df['成交量'].shift(1)*2
+
+#     #（当日最高价-收盘价）/昨日收盘价>1.1
+#     con4 = (df['最高价_复权']- df['前收盘价_复权'])/df['前收盘价_复权'] - (df['收盘价_复权']-df['前收盘价_复权']) *1.3/df['前收盘价_复权']<0
+#     #当日涨幅为正
+#     con5 = df['收盘价_复权'] > df['前收盘价_复权'] 
+#     # df.loc[con2 & con3  & con5, 'signal'] = 0
+#     df.loc[con2 & con3 & con4  & con5, 'signal'] = 1
+#          #计算未来表现
+#     for day in day_list:
+#         df['%s日后涨跌幅' % day] = df['收盘价'].shift(0 - day) / df['开盘价'].shift(-1) - 1
+#         df['%s日后是否上涨' % day] = df['%s日后涨跌幅' % day] > 0
+#         df['%s日后是否上涨' % day].fillna(value=False, inplace=True)
+
+# def analysis(all_df, day_list):
+#     # 计算N日后涨跌幅大于0的概率
+#     for signal, group in all_df.groupby('signal'):
+#         if signal == 1:
+#             print('\n', '=' * 10, '看涨信号', '=' * 10)
+#         elif signal == 0:
+#             print('\n', '=' * 10, '看跌信号', '=' * 10)
+#         print(group[[str(i) + '日后涨跌幅' for i in day_list]].describe())
+#         for i in day_list:
+#             if signal == 1:
+#                 print(str(i) + '天后涨跌幅大于0概率', '\t',
+#                       float(group[group[str(i) + '日后涨跌幅'] > 0].shape[0]) / group.shape[0],
+#                       '\t', str(i) + '天后上涨收益率', '\t',
+#                       float(group[group[str(i) + '日后涨跌幅'] > 0][str(i) + '日后涨跌幅'].mean()),
+#                       '\t', str(i) + '天后下跌收益率', '\t',
+#                       float(group[group[str(i) + '日后涨跌幅'] < 0][str(i) + '日后涨跌幅'].mean()),
+#                       '\t', str(i) + '天后每笔交易平均收益率', '\t',
+#                       float(group[group[str(i) + '日后涨跌幅'] > 0].shape[0] / group.shape[0] *
+#                             group[group[str(i) + '日后涨跌幅'] > 0][str(i) + '日后涨跌幅'].mean() +
+#                             group[group[str(i) + '日后涨跌幅'] <= 0][str(i) + '日后涨跌幅'].mean() *
+#                             group[group[str(i) + '日后涨跌幅'] <= 0].shape[0] / group.shape[0]))
+
+#             elif signal == 0:
+#                 print(str(i) + '天后涨跌幅小于0概率', '\t',
+#                       float(group[group[str(i) + '日后涨跌幅'] < 0].shape[0]) / group.shape[0],
+#                        '\t', str(i) + '天后上涨收益率', '\t',
+#                       float(group[group[str(i) + '日后涨跌幅'] > 0][str(i) + '日后涨跌幅'].mean()),
+#                       '\t', str(i) + '天后下跌收益率', '\t',
+#                       float(group[group[str(i) + '日后涨跌幅'] < 0][str(i) + '日后涨跌幅'].mean()),
+#                       '\t', str(i) + '天后每笔交易平均收益率', '\t',
+#                       float(group[group[str(i) + '日后涨跌幅'] > 0].shape[0] / group.shape[0] *
+#                             group[group[str(i) + '日后涨跌幅'] > 0][str(i) + '日后涨跌幅'].mean() +
+#                             group[group[str(i) + '日后涨跌幅'] <= 0][str(i) + '日后涨跌幅'].mean() *
+#                             group[group[str(i) + '日后涨跌幅'] <= 0].shape[0] / group.shape[0]))
+
+# if __name__ == '__main__':
+#     # 使用ProcessPoolExecutor进行多进程处理
+#     with ProcessPoolExecutor() as executor:
+#         for stkcd in stkcd_list:
+#             df=pd.read_sql_query(text("""SELECT * FROM tr_day_stata where "Stkcd"= :stkcd and trddt> '2020-01-01'and trddt< '2021-01-01' order by trddt ; """),engine,params={'stkcd':stkcd})
+#             df.rename(columns={'trddt': '交易日期', 'Opnprc': '开盘价', 'Hiprc': '最高价', 'Loprc': '最低价', 'Clsprc': '收盘价','Stkcd':'股票代码','Dnshrtrd':'成交量'},
+#                   inplace=True)
+#             df['前收盘价'] = df['收盘价'].shift()
+#             df['前收盘价'].fillna(value=df['开盘价'], inplace=True)
+#             print(df)
+#            #跳过df为空的股票
+#             if df.empty:
+#                 continue
+#             #计算技术指标
+#             cal_fl(df)
+#             #合并上面计算的df
+#             all_df = pd.concat([all_df, df])
+
+#         analysis(all_df, day_list)
+
+
+
+
+
+# # def process_file(f):
+# #     print(f"Processing file: {f}")  # 打印正在处理的文件名
+# #     # # 加载数据
+# #     # df = load_file(file_path, f)
+# #     # # 使用指数数据与股票数据合并，补充停牌的数据
+# #     # df = merge_index(df, index_df)
+# #     # 计算交易天数
+# #     df['交易天数'] = df.index + 1
+# #     # 剔除上市交易日期不足N天的股票
+# #     # df = df[df['交易天数'] > 250]
+# #     if df.empty:
+# #         return None
+# #     # 计算你需要的技术指标
+# #     df = cal_fl(df)
+
+# #     # 计算未来表现
+# #     for day in day_list:
+# #         df['%s日后涨跌幅' % day] = df['收盘价'].shift(0 - day) / df['开盘价'].shift(-1) - 1
+# #         df['%s日后是否上涨' % day] = df['%s日后涨跌幅' % day] > 0
+# #         df['%s日后是否上涨' % day].fillna(value=False, inplace=True)
+
+# #     # 选取指定时间范围内的股票
+# #     df = df[(df['交易日期'] >= pd.to_datetime(start_time)) & (df['交易日期'] <= pd.to_datetime(end_time))]
+# #     df = df[df['成交量'] > 0]
+# #     return df
