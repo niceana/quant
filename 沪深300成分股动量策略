@@ -7,7 +7,9 @@ import seaborn as sns
 from datetime import datetime, timedelta
 import warnings
 import time
+import tushare as ts
 warnings.filterwarnings('ignore')
+
 
 ###策略描述
 """
@@ -24,54 +26,51 @@ warnings.filterwarnings('ignore')
 5.绩效分析。"""
 
 ### 代码实现
+
+
 # 设置中文显示
 plt.rcParams['font.sans-serif'] = ['SimHei']
 plt.rcParams['axes.unicode_minus'] = False
 
 # 1. 数据获取函数
-def fetch_data():
+def fetch_data(start_date,end_date):
     """
     获取沪深300成分股和指数数据
     """
     print("正在获取数据...")
     
-
-    
-    # 获取近5年数据
-    end_date = datetime.now().strftime('%Y%m%d')
-    start_date = (datetime.now() - timedelta(days=5*365)).strftime('%Y%m%d')
-    
-    # 获取沪深300指数数据作为基准
-    benchmark_data = ak.stock_zh_index_daily(symbol="sh000300")
-    benchmark_data['date'] = pd.to_datetime(benchmark_data['date'])
+    pro = ts.pro_api()
+    benchmark_data = pro.index_daily(ts_code='399300.SZ', start_date=start_date, end_date=end_date)
+    benchmark_data = benchmark_data.sort_values(by='trade_date', ascending=True)
+    benchmark_data['date'] = pd.to_datetime(benchmark_data['trade_date'])
     benchmark_data.set_index('date', inplace=True)
-    # benchmark_data = benchmark_data[['close']]
-    # benchmark_data.columns = ['close']
+    benchmark_data = benchmark_data[['open','close']].copy()
+    print(f"基准数据获取完毕,{benchmark_data.head()}")
     
     
     # 获取沪深300成分股列表
-    # stock_zh_a_spot_df = ak.stock_zh_a_spot()
-
-    hs300_constituents = ak.index_stock_cons(symbol="000300")
-    symbol_list = hs300_constituents['品种代码'].tolist()
+    pro = ts.pro_api()
+    #start_date加一个月
+    end_date1 = (datetime.strptime(start_date, '%Y%m%d') - timedelta(days=30)).strftime('%Y%m%d')
+    hs300_constituents = pro.index_weight(index_code='399300.SZ', start_date='20200101', end_date='20200201')
+    symbol_list = hs300_constituents['con_code'].tolist()
+    print(f"沪深300成分股数量: {len(symbol_list)}")
+    
     
     # 获取所有成分股数据
     all_stock_data = {}
-    for symbol in symbol_list[:50]:  # 这里只取前50只股票加快速度，实际应用中应该使用全部
+    for symbol in symbol_list: 
         try:
             print(f"正在获取 {symbol} 数据...")
-            stock_data = ak.stock_zh_a_hist(symbol=symbol, period="daily", start_date=start_date, end_date=end_date, adjust="qfq")
+            stock_data = pro.daily(ts_code=symbol, start_date=start_date, end_date=end_date)
+            #按照时间正序
+            stock_data = stock_data.sort_values(by='trade_date', ascending=True)
             print(f"正在清洗 {symbol} 数据...")
             if not stock_data.empty:
-                stock_data['date'] = pd.to_datetime(stock_data['日期'])
-                stock_data['close']=stock_data['收盘']
-                stock_data['open']=stock_data['开盘']
+                stock_data['date'] = pd.to_datetime(stock_data['trade_date'])
                 stock_data.set_index('date', inplace=True)
-                all_stock_data[symbol] = stock_data[['close']]
+                all_stock_data[symbol] = stock_data[['open','close']]
                 print(f"已获取 {symbol} 数据")
-            
-            #等待1秒钟，防止请求过快被封IP
-            time.sleep(1)
         except:
             continue
     
@@ -105,10 +104,13 @@ class MomentumStrategy(bt.Strategy):
     def __init__(self):
         self.counter = 0
         self.inds = {}
-        
+        # 计算动量因子
+
         for d in self.datas:
             self.inds[d] = {}
             self.inds[d]['momentum'] = bt.indicators.ROC(d.close, period=self.params.lookback)
+            print(self.inds[d]['momentum'])
+
     def notify_order(self, order):
         # 订单状态变化时调用
         if order.status in [order.Submitted, order.Accepted]:
@@ -130,12 +132,12 @@ class MomentumStrategy(bt.Strategy):
     def next(self):
         self.counter += 1
         
-        # 每月调仓一次
+        # 20个交易日调仓一次
         if self.counter % self.params.rebalance_days != 0:
             return
-        print(f"""
-              ============================================
+        print(f"""============================================
               \n{self.counter}日, 开始新一轮选股...""")
+        
         # 卖出当前持仓
         for i, d in enumerate(self.datas):
             if self.getposition(d).size:
@@ -150,39 +152,44 @@ class MomentumStrategy(bt.Strategy):
             if len(d) > self.params.lookback and not np.isnan(self.inds[d]['momentum'][0]):
                 momentums.append(self.inds[d]['momentum'][0])
                 valid_stocks.append(d)
-        
+
         if not valid_stocks:
             print("没有有效的股票可供交易")
             return
         
         # 计算分位数
         momentums = np.array(momentums)
+        print(f"动量值: {momentums}")
         threshold = np.percentile(momentums, 100 * (1 - self.params.top_pct))
-        
+        print(f"分位数: {threshold}")
         
         
         # 买入动量前10%的股票
         print(f"符合条件的股票数量: {len(valid_stocks)}")
         print(f"动量阈值: {threshold}")
-        
+
         # 找出所有超过阈值的股票
         buy_stocks = []
         for d in valid_stocks:
             if self.inds[d]['momentum'][0] >= threshold:
                 buy_stocks.append(d)
+        print(len(buy_stocks))
 
         # 等权重分配资金买入
         if buy_stocks:
             portfolio_value = self.broker.getvalue()
             print(f"买入 {len(buy_stocks)} 只股票, 总投资金额: {portfolio_value * 0.9:.2f}")
-            
             for d in buy_stocks:
+                
                 if d.close[0] > 0:  # 确保价格有效
                     size = portfolio_value * 0.9 / len(buy_stocks) / d.close[0]
                     self.buy(d, size=size)
-                    
+                    print(f"买入 {d._name}, 价格: {d.close[0]:.2f}, 数量: {size:.2f}")    
         else:
             print("没有股票超过动量阈值")
+        #清空动量值
+        momentums = []
+        valid_stocks = []
                
 
 
@@ -209,10 +216,11 @@ def run_backtest(stock_data, benchmark_data):
     
     # 添加基准数据
     start_time = datetime(2020, 1, 1)
-    end_time = datetime(2025, 1, 1)
+    end_time = datetime(2023, 1, 1)
     benchmark_df = bt.feeds.PandasData(
         dataname=benchmark_data,
-        fromdate=start_time, todate=end_time,
+        datetime=None,  # 已经使用日期作为索引
+        open=0, high=-1, low=-1, close=0, volume=-1, openinterest=-1
     )
     cerebro.adddata(benchmark_df, name='HS300')
     
@@ -252,7 +260,9 @@ def run_backtest(stock_data, benchmark_data):
     print("年化收益率: {:.2f}%".format(annual_return))
     print("夏普比率: {:.2f}".format(sharpe_ratio))
     print("最大回撤: {:.2f}%".format(max_drawdown))
-    
+                # 关闭所有 data 的绘图（即K线）
+    for data in cerebro.datas:
+        data.plotinfo.plot = False
     # 绘制净值曲线
     cerebro.plot(style='candlestick', volume=False)
     
@@ -312,7 +322,7 @@ def sensitivity_analysis(stock_data, benchmark_data, lookback_periods=[30, 60, 9
 # 主函数
 def main():
     # 获取数据
-    stock_data, benchmark_data = fetch_data()
+    stock_data, benchmark_data = fetch_data('20200101', '20231231')
     
     # 计算动量因子 (60天回看期)
     momentum_data = calculate_momentum_factor(stock_data, lookback_period=60)
