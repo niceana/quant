@@ -1,0 +1,308 @@
+import pandas as pd
+import numpy as np
+from statsmodels.tsa.stattools import adfuller
+from datetime import datetime, timedelta
+import statsmodels.api as sm
+from typing import Optional
+import warnings
+warnings.filterwarnings("ignore")
+
+
+def get_coe(all_clean_df, usd_df, start_date, end_date):
+    """
+    计算系数
+    """
+  
+    print("""+++++++++++++++++++++++
+        \n+++++++++++++++++++++""")
+    result_series = pd.Series()
+
+ 
+    # 5.ADF检验
+    for col in all_clean_df.columns:
+        if col == '美元兑人民币汇率' or col == 'log_return' or col == 'future_63_avg_return':
+            continue
+        print("==============================")
+        # 切片数据
+        clean_df_slice = all_clean_df[col][start_date:end_date]
+
+        # ADF检验
+        adf_result = adf_test(clean_df_slice)
+
+        # 6.指标进行时序Z-score标准化
+        if adf_result is not None:
+            zscore_result = standardize_series(adf_result)
+            print(f"{col}序列Z-score标准化完成")
+
+            # 7.回归分析
+            result = perform_regression_analysis(zscore_result, usd_df['future_63_avg_return'], col)
+            print(f"回归结果：{result}")
+            if result is not None:
+                # 8.汇总结果，加入series
+                result_serie = pd.Series(result, index=[col])
+                result_series = pd.concat([result_series, result_serie])
+                
+    return  result_series
+
+def perpare_data(econ_urls, start_date, end_date, url ):
+    """
+    准备数据
+    """
+    all_clean_df = pd.DataFrame()
+     # 1.汇率数据
+    usd_df = pd.read_excel(url).sort_values('date').dropna()
+    usd_df['date'] = pd.to_datetime(usd_df['date'],format='%Y%m%d')
+    usd_df.set_index('date', inplace=True)
+    print(f"读取{url}完成")
+
+    # 2.计算未来63天收益率
+    usd_df = calculate_future_returns(usd_df, start_date, end_date,63)
+    print(usd_df)
+    print("未来63天收益率计算完成")
+
+    # 3.读取经济增长数据和流动性数据
+    for econ_url in econ_urls:
+        #识别是否为月频或日频数
+        clean_df = clean_data(econ_url,usd_df)
+        print(clean_df)
+        all_clean_df = pd.concat([all_clean_df, clean_df],axis=1)
+
+    return all_clean_df , usd_df
+
+def clean_data(econ_url,usd_df):
+    """
+    读取基础数据并清理
+    """
+    
+   
+    #如果日期为日频，则生成完整的连续日索引
+    if '日' in econ_url:
+        df = pd.read_excel(econ_url)
+        df['date'] = pd.to_datetime(df['date'],format='%Y%m%d')
+        df.set_index('date', inplace=True)
+        #将df与usd_df合并，以usd_df的日期索引为准,且向前填充空值
+        df = df.reindex(usd_df.index, method='ffill')
+        df = pd.concat([usd_df, df], axis=1)
+        # df_daily_complete = df.resample('D').asfreq()
+        #指标后置
+        df_daily_complete = df.shift(1)
+        return df_daily_complete
+    
+    #如果日期为月频，则生成完整的连续月份索引
+    if '月' in econ_url:
+        df = pd.read_excel(econ_url)
+        
+        #将202301转为2023-01-01
+        df['date'] = df['date'].apply(lambda x: str(x)[:4] + '-' + str(x)[4:6] + '-01')
+        df['date'] = pd.to_datetime(df['date'],format='%Y-%m-%d')
+        df.set_index('date', inplace=True)
+        #将df与usd_df合并，以usd_df的日期索引为准
+        df = df.reindex(usd_df.index, method='ffill')
+        df = pd.concat([usd_df, df], axis=1)
+        # df_monthly_complete = df.resample('ME').asfreq()
+        #指标后置
+        df_monthly_complete = df.shift(21)
+        return df_monthly_complete
+    
+    #如果日期为周频，则生成完整的连续周索引
+    if '周' in econ_url:
+        df = pd.read_excel(econ_url)
+        df['date'] = pd.to_datetime(df['date'],format='%Y%m%d')
+        df.set_index('date', inplace=True)
+        #将df与usd_df合并，以usd_df的日期索引为准
+        df = df.reindex(usd_df.index, method='ffill')
+        df = pd.concat([usd_df, df], axis=1)
+        # df_weekly_complete = df.resample('W').asfreq()
+        #指标后置
+        df_weekly_complete = df.shift(5)
+        return df_weekly_complete
+   
+def adf_test(df_slice):
+    """
+    ADF检验
+    """
+    #去除空值
+    clean_df_slice = df_slice.dropna()
+   
+    #去除太短的序列
+    if clean_df_slice.shape[0] <5:
+        print(f"{clean_df_slice.name}序列长度过短，跳过")
+        return None
+    else:
+        try: 
+            result = adfuller(clean_df_slice)
+        
+            #打印结果
+            # print('ADF Statistic: %f' % result[0])
+            # print('p-value: %f' % result[1])
+            # print('Critical Values:')
+            # for key, value in result[4].items():
+            #     print('\t%s: %.3f' % (key, value))
+
+            p_value = result[1]
+            if p_value < 0.1:
+                print(f"{clean_df_slice.name}序列平稳")
+                return clean_df_slice
+            
+            else:
+                print(f"{clean_df_slice.name}序列不平稳，进行一阶差分")
+                # 对序列进行一阶差分
+                diff_series = clean_df_slice.diff().dropna()
+                if len(diff_series) < 5:
+                    return None
+                # 差分后序列ADF检验
+                diff_result = adfuller(diff_series)
+                diff_p_value = diff_result[1]
+                
+                if diff_p_value < 0.1:
+                    print("差分后序列平稳")
+                    return diff_series
+                else:
+                    print(f"{clean_df_slice.name}序列不平稳，跳过")
+                    return None
+        except:
+            print(f"{clean_df_slice.name}序列有问题，跳过")
+            return None
+
+def get_rolling_window(current_date):
+        """
+        获取滚动窗口
+        """
+        current_date = datetime.strptime(current_date, '%Y-%m-%d')
+        if current_date.year < 2015:
+            start_date = '2005-01-01'
+            end_date = current_date.strftime('%Y-%m-%d')
+        else:
+            start_date = (current_date - timedelta(days=365*10)).strftime('%Y-%m-%d')
+            end_date = current_date.strftime('%Y-%m-%d')
+            
+        return start_date, end_date
+
+def standardize_series(series: pd.Series) -> pd.Series:
+        """对序列进行Z-score标准化"""
+        return (series - series.mean()) / series.std()
+
+def calculate_future_returns(usd_df: pd.DataFrame, start_date: str, end_date: str ,days: int) -> pd.Series:
+    """
+    计算未来63个交易日的涨跌幅
+    """
+
+    #滚动计算计算未来63个交易日的涨跌幅
+    # 计算对数收益率
+    usd_df['log_return'] = np.log(usd_df['美元兑人民币汇率'] / usd_df['美元兑人民币汇率'].shift(1))
+    # 计算未来63天的对数收益率
+    usd_df['future_63_avg_return'] = (
+    usd_df['log_return'].shift(-62)  # 将数据向前移动62位（使当前行对应未来63天的起始点）
+    .rolling(window=63, min_periods=1)
+    .mean())
+    return usd_df
+
+def perform_regression_analysis(indicator_series: pd.Series, 
+                                future_returns: pd.Series,
+                                indicator_name: str) -> Optional[float]:
+    """执行一元线性回归分析"""
+    # 确保两个序列的索引对齐
+
+    aligned_data = pd.concat([indicator_series, future_returns], axis=1).dropna()
+
+    if len(aligned_data) < 10:  # 确保有足够的数据点
+        return None
+   
+    X = aligned_data.iloc[:, 0]
+    y = aligned_data.iloc[:, 1]
+    
+    # 添加常数项
+    X = sm.add_constant(X)
+    
+    # 执行OLS回归
+    model = sm.OLS(y, X).fit()
+    
+    # 检查P值和系数方向
+    p_value = model.pvalues[1]
+    coef = model.params[1]
+    print(f"{indicator_name}回归结果：P值={p_value:.3f}, 系数={coef:.3f}")
+    # 检查是否满足条件
+    # if p_value < 0.1:
+    #     # 检查经济学逻辑方向
+    #     if indicator_name in self.economic_logic_directions:
+    #         expected_direction = self.economic_logic_directions[indicator_name]
+    #         if (expected_direction == "positive" and coef > 0) or \
+    #            (expected_direction == "negative" and coef < 0):
+    #             return coef
+    #         else:
+    #             return None
+    #     else:
+    #         # 未列示方向的指标仅需考虑P值
+    #         return coef
+    # else:
+    #     return None
+    if p_value < 0.1:
+        return coef
+    else:
+        return None
+
+def cal_index_increment(all_clean_df, usd_df,  current_date,coef_series) -> float:
+    """
+    计算指数增量
+    """
+    #系数乘以标准化序列
+    standardize_df = pd.DataFrame()
+    
+    #指数增量序列
+    index_increment_series = pd.Series()
+
+    for col in all_clean_df.columns:
+        if col not in coef_series.index:
+            continue
+        #标准化
+        #current_date加半年，因为数据是半年频率
+        if current_date[-5:] == '12-31':
+            end_date = current_date[:-5] + '06-30'
+        else:
+            end_date = current_date[:-5] + '12-31'
+
+        clean_df_slice = all_clean_df[col][current_date:end_date]
+        standardize_clean_df_slice = standardize_series(clean_df_slice)
+        #对所有值乘以系数
+        standardize_df[col] = standardize_clean_df_slice*coef_series[col]
+    #遍历每行，将每行的数相加
+    for index in standardize_df.iterrows():
+        #将standardize_df的每行所有值相加
+        index_increment_series = standardize_df.apply(lambda row: row.sum(), axis=1)
+    #进行累加
+    index_increment_series = index_increment_series.cumsum()
+
+    return index_increment_series
+
+
+def main(cureent_date):
+    #, './经济增长数据/月度数据.xlsx', './经济增长数据/周度数据.xlsx', './流动性数据/日度数据.xlsx', './流动性数据/月度数据.xlsx', './流动性数据/周度数据.xlsx'
+    econ_urls = ['./流动性数据/日度数据.xlsx', './流动性数据/月度数据.xlsx', './流动性数据/周度数据.xlsx'
+    ]
+    url = './美元兑人民币汇率.xlsx'
+
+    all_results = pd.Series()
+    current_date = cureent_date
+    # 1.获取滚动窗口
+    start_date, end_date = get_rolling_window(current_date)
+    # 2.准备数据
+    all_clean_df , usd_df = perpare_data(econ_urls, start_date, end_date, url)
+    # 3.计算指标系数
+    coef_series = get_coe(all_clean_df, usd_df, start_date, end_date)
+    #将all_results取绝对值,最高值按均值加3个标准差，其他值同比例缩小
+    abs_coef_series = coef_series.abs()
+    percentile_upper = (abs_coef_series.mean() + 3*abs_coef_series.std())/abs_coef_series.max()
+    coef_series = coef_series*percentile_upper
+
+    # 4.计算指数增量
+    return cal_index_increment(all_clean_df, usd_df, current_date,coef_series)
+
+            
+if __name__ == '__main__':
+    main(cureent_date='2021-09-30')
+
+
+
+
+
+        
